@@ -1,0 +1,198 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Super Mario Maker HTML5 Ultimate v6</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #5c94fc; overflow: hidden; }
+  canvas { display: block; margin: 0 auto; image-rendering: pixelated; }
+  #toolbar {
+    position: fixed; top: 0; left: 0; right: 0;
+    background: rgba(0,0,0,0.8); color: white;
+    display: flex; padding: 5px; align-items: center;
+    font-family: sans-serif; z-index: 10;
+  }
+  .tool { padding: 5px 10px; margin: 0 5px; background: #333; cursor: pointer; }
+  .tool.selected { background: #f39c12; }
+  #saveLoad { margin-left: auto; }
+  #menu {
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.9); color: white;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    font-family: sans-serif; font-size: 24px;
+  }
+  #menu button { margin: 10px; padding: 10px 20px; font-size: 20px; cursor: pointer; background: #f39c12; border: none; color: white; }
+  #timer { position: fixed; top: 5px; right: 10px; color: white; font-size: 20px; font-family: sans-serif; }
+</style>
+</head>
+<body>
+<div id="menu">
+  <h1>Super Mario Maker HTML5 Ultimate</h1>
+  <button onclick="startGame()">Start Game</button>
+</div>
+<div id="toolbar" style="display:none;">
+  <div class="tool selected" data-tool="ground">Ground</div>
+  <div class="tool" data-tool="block">Block</div>
+  <div class="tool" data-tool="goomba">Goomba</div>
+  <div class="tool" data-tool="koopa">Koopa</div>
+  <div class="tool" data-tool="hammerbro">Hammer Bro</div>
+  <div class="tool" data-tool="mushroom">Mushroom</div>
+  <div class="tool" data-tool="star">Star</div>
+  <div class="tool" data-tool="checkpoint">Checkpoint</div>
+  <div class="tool" data-tool="platform">Platform</div>
+  <div class="tool" data-tool="goal">Goal</div>
+  <div class="tool" data-tool="erase">Erase</div>
+  <div class="tool" id="modeToggle">Switch to Play Mode</div>
+  <div id="saveLoad">
+    <button onclick="saveLevelLocal()">Save Local</button>
+    <button onclick="loadLevelLocal()">Load Local</button>
+    <button onclick="saveLevelOnline()">Save Online</button>
+    <button onclick="loadLevelOnline()">Load Online</button>
+  </div>
+</div>
+<div id="timer"></div>
+<canvas id="gameCanvas"></canvas>
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+canvas.width = window.innerWidth;
+canvas.height = window.innerHeight - 40;
+let width = canvas.width, height = canvas.height;
+
+let gridSize = 32;
+let cols = 120;
+let rows = Math.floor(height / gridSize);
+let level = Array(rows).fill(null).map(()=>Array(cols).fill(0));
+
+let mode = 'edit';
+let selectedTool = 'ground';
+let timer = 300;
+let timerInterval = null;
+
+// Multiplayer
+let ws;
+function connectMultiplayer() {
+  ws = new WebSocket("wss://super-mario-maker-clone-back-end.onrender.com");
+  ws.onopen = () => console.log("Connected to multiplayer server.");
+  ws.onmessage = msg => {
+    let data = JSON.parse(msg.data);
+    if (data.type === "players") remotePlayers = data.players;
+  };
+}
+let remotePlayers = [];
+
+function startGame() {
+  document.getElementById('menu').style.display = 'none';
+  document.getElementById('toolbar').style.display = 'flex';
+  startTimer();
+  connectMultiplayer();
+}
+
+function startTimer() {
+  timer = 300;
+  document.getElementById('timer').textContent = "Time: " + timer;
+  if (timerInterval) clearInterval(timerInterval);
+  timerInterval = setInterval(() => {
+    if (mode === 'play') {
+      timer--;
+      document.getElementById('timer').textContent = "Time: " + timer;
+      if (timer <= 0) gameOver();
+    }
+  }, 1000);
+}
+
+// Save/load local
+function saveLevelLocal() {
+  const data = JSON.stringify(level);
+  const blob = new Blob([data], {type: 'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'level.json';
+  a.click();
+}
+function loadLevelLocal() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'application/json';
+  input.onchange = e => {
+    const file = e.target.files[0];
+    const reader = new FileReader();
+    reader.onload = () => { level = JSON.parse(reader.result); };
+    reader.readAsText(file);
+  };
+  input.click();
+}
+
+// Online save/load
+async function saveLevelOnline() {
+  await fetch("https://super-mario-maker-clone-back-end.onrender.com/saveLevel", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({level})
+  });
+  alert("Level saved online!");
+}
+async function loadLevelOnline() {
+  const res = await fetch("https://super-mario-maker-clone-back-end.onrender.com/level/1");
+  const data = await res.json();
+  level = data.level;
+  alert("Level loaded from server!");
+}
+
+// Player
+let player = { x: 64, y: 64, w: 28, h: 28, vy: 0, onGround: false };
+function initPlayer() { player.x=64; player.y=64; player.vy=0; player.onGround=false; }
+
+let camera = { x: 0 };
+let keys = {};
+window.addEventListener('keydown', e => keys[e.code]=true);
+window.addEventListener('keyup', e => keys[e.code]=false);
+
+function update() {
+  if (mode==='play') {
+    player.vy+=0.8;
+    player.x+=(keys['ArrowRight']?3:0)-(keys['ArrowLeft']?3:0);
+    player.y+=player.vy;
+    if (keys['Space'] && player.onGround) { player.vy=-12; player.onGround=false; }
+    player.onGround=false;
+    if (isSolid(player.x, player.y+player.h) || isSolid(player.x+player.w-1, player.y+player.h)) {
+      player.onGround=true;
+      player.vy=0;
+      player.y=Math.floor((player.y+player.h)/gridSize)*gridSize-player.h;
+    }
+    camera.x=player.x-width/2+player.w/2;
+    if (camera.x<0) camera.x=0;
+    if (camera.x>cols*gridSize-width) camera.x=cols*gridSize-width;
+    if (ws && ws.readyState===WebSocket.OPEN) {
+      ws.send(JSON.stringify({type:"update", x:player.x, y:player.y}));
+    }
+  }
+}
+function isSolid(px,py) {
+  const c=Math.floor(px/gridSize), r=Math.floor(py/gridSize);
+  if (c<0||r<0||c>=cols||r>=rows) return false;
+  return level[r][c]===1||level[r][c]===2;
+}
+function draw() {
+  ctx.clearRect(0,0,width,height);
+  ctx.save();
+  ctx.translate(-camera.x,0);
+  for (let r=0; r<rows; r++) {
+    for (let c=0; c<cols; c++) {
+      if (level[r][c]===1) { ctx.fillStyle='#8B4513'; ctx.fillRect(c*gridSize,r*gridSize,gridSize,gridSize); }
+      if (level[r][c]===2) { ctx.fillStyle='#DAA520'; ctx.fillRect(c*gridSize,r*gridSize,gridSize,gridSize); }
+    }
+  }
+  ctx.fillStyle='#ff0000';
+  ctx.fillRect(player.x,player.y,player.w,player.h);
+  ctx.fillStyle='#00ff00';
+  remotePlayers.forEach(p=>ctx.fillRect(p.x,p.y,28,28));
+  ctx.restore();
+}
+function loop() { update(); draw(); requestAnimationFrame(loop); }
+loop();
+</script>
+</body>
+</html>
